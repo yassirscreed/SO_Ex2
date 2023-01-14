@@ -28,7 +28,7 @@ typedef struct
 
 typedef struct
 {
-    unint8_t code;
+    uint8_t code;
     char message[1024];
 }Message;
 

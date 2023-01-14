@@ -1,5 +1,5 @@
 #include "logging.h"
-#include "requests.h"
+#include "../requests.h"
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -28,7 +28,7 @@ void response_list(int fd_pipe){
         return;
     }
     while(list.last != 1){    
-        fprintf(stdout, "%s %zu %zu %zu\n", list.box_name, list.box_size, list.n_publishers, list.n_subscribers);
+        fprintf(stdout, "%d %zu %zu %zu\n", list.box_name, list.box_size, list.n_pubs, list.n_subs);
         if(read(fd_pipe,&list,sizeof(Manager_list)) ==0)
             return; //add
     }
