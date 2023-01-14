@@ -1,11 +1,17 @@
 #include "logging.h"
-#include "../requests.h"
+#include "requests.h"
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
 #include <errno.h>
+
+int compare(const void* a, const void* b) {
+    Manager_list a1 = *(Manager_list *) a;
+    Manager_list b1 = *(Manager_list *) b;
+    return strcmp(a1.box_name,b1.box_name);
+}
 
 void response_create_remove(int fd_pipe){
     Response response;
@@ -20,17 +26,27 @@ void response_create_remove(int fd_pipe){
 }
 
 void response_list(int fd_pipe){
-    Manager_list list;
-    if(read(fd_pipe,&list,sizeof(Manager_list))==0)
-        return; //add
-    if(list.last == 1){
+    Manager_list list[64],m;
+    int i=0,j;
+    if(read(fd_pipe,&m,sizeof(Manager_list))==0)
+            return; //add
+    while(m.last != 1){
+        if(read(fd_pipe,&m,sizeof(Manager_list))==0)
+            return; //add
+        list[i] = m;  //podem sair todos duplicados~
+        i++;
+    }
+
+    if(i == 0){
         fprintf(stdout, "NO BOXES FOUND\n"); //fix para dar em ordem alfabética
         return;
     }
-    while(list.last != 1){    
-        fprintf(stdout, "%d %zu %zu %zu\n", list.box_name, list.box_size, list.n_pubs, list.n_subs);
-        if(read(fd_pipe,&list,sizeof(Manager_list)) ==0)
-            return; //add
+    else{
+        size_t size = (size_t) i;
+        qsort(list, size, sizeof(Manager_list), compare);
+        for(j=0;j<=i;j++){ //might segfault
+            fprintf(stdout, "%s %zu %zu %zu\n", list[i].box_name, list[i].box_size, list[i].n_publishers, list[i].n_subscribers);
+        }
     }
 
 }
