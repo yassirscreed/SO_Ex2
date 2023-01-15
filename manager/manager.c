@@ -45,7 +45,7 @@ void response_list(int fd_pipe){
         size_t size = (size_t) i;
         qsort(list, size, sizeof(Manager_list), compare);
         for(j=0;j<=i;j++){ //might segfault
-            fprintf(stdout, "%s %zu %zu %zu\n", list[i].box_name, list[i].box_size, list[i].n_publishers, list[i].n_subscribers);
+            fprintf(stdout, "%s %zu %zu %zu\n", list[i].box_name, list[i].box_size, list[i].n_pubs, list[i].n_subs);
         }
     }
 

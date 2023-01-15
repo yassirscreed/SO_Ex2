@@ -31,6 +31,7 @@ int _max_sessions;
 pc_queue_t* _queue;
 pthread_t* _workers;
 
+
 Box _boxes[64];
 
 
@@ -240,8 +241,8 @@ void list_box(Register regist){
         if(_boxes[i].active == 1){
             strcpy(ml.box_name,_boxes[i].box_name);
             ml.box_size = sizeof(_boxes[i]); //?
-            ml.n_publishers=_boxes[i].n_publishers;
-            ml.n_subscribers=_boxes[i].n_subscribers;
+            ml.n_pubs=_boxes[i].n_publishers;
+            ml.n_subs=_boxes[i].n_subscribers;
             if(write(fd_pipe,&ml,sizeof(Manager_list)) == -1)
                 return;
             active_boxes++;    
@@ -256,6 +257,35 @@ void list_box(Register regist){
     unlink(regist.named_pipe);      
 }
 
+void *worker_thread_function(void *arg) {
+    while (1) {
+        //dequeue request from queue
+        Register* regist = pcq_dequeue(_queue);
+        arg = arg;
+        //handle request
+        switch (regist->code) {
+            case 1:
+            register_publisher(*regist);
+            break;
+            case 2:
+            register_subscriber(*regist);
+                break;
+            case 3:
+            register_box(*regist);
+                break;
+            case 5:
+            remove_box(*regist);
+                break;
+            case 7:
+            list_box(*regist);
+                break;
+            default:
+                break;
+
+        }
+    }
+    return NULL;
+}
 
 int main(int argc, char** argv) {
 if (argc != 3) {
@@ -267,6 +297,12 @@ if (argc != 3) {
 char pipe_name[256];
 strcpy(pipe_name,argv[1]);
 _max_threads = atoi(argv[2]);
+_queue = malloc(sizeof(pc_queue_t));
+pcq_create(_queue, (size_t)_max_threads);
+_workers = malloc(sizeof(pthread_t) * (size_t)_max_threads);
+for(int i = 0; i < _max_threads; i++) {
+    pthread_create(&_workers[i], NULL, worker_thread_function, NULL);
+}
 
 
 tfs_init(NULL);
@@ -299,19 +335,19 @@ while (1) {
     while(bytes_read > 0)
         switch(regist.code){
             case 1:
-            register_publisher(regist);
+            pcq_enqueue(_queue,&regist);
             break;
             case 2:
-            register_subscriber(regist);
+            pcq_enqueue(_queue,&regist);
             break;
             case 3:
-            register_box(regist);
+            pcq_enqueue(_queue,&regist);
             break;
             case 5:
-            remove_box(regist);
+            pcq_enqueue(_queue,&regist);
             break;
             case 7:
-            list_box(regist);
+            pcq_enqueue(_queue,&regist);
             break;
             default:
             break;
@@ -322,6 +358,9 @@ while (1) {
 
 }
 
+for(int i = 0; i < _max_threads; i++) {
+    pthread_join(_workers[i], NULL);
+}
 close(reg_pipe);
 unlink(pipe_name);
 return 0;

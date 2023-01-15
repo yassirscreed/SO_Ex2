@@ -20,7 +20,7 @@ typedef struct
 {
     uint8_t code;
     uint8_t last;
-    char box_name;
+    char box_name[32];
     uint64_t box_size;
     uint64_t n_pubs;
     uint64_t n_subs;
