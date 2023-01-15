@@ -30,13 +30,14 @@ int _max_threads;
 int _max_sessions;
 pc_queue_t* _queue;
 pthread_t* _workers;
-
+int _server_running = 1;
 
 Box _boxes[64];
 
 
 void end(int sig){
     (void) sig;
+    _server_running = 0;
     exit(EXIT_SUCCESS);
 }
 
@@ -257,11 +258,10 @@ void list_box(Register regist){
     unlink(regist.named_pipe);      
 }
 
-void *worker_thread_function(void *arg) {
+void *worker_thread_function() {
     while (1) {
         //dequeue request from queue
         Register* regist = pcq_dequeue(_queue);
-        arg = arg;
         //handle request
         switch (regist->code) {
             case 1:
@@ -299,7 +299,7 @@ strcpy(pipe_name,argv[1]);
 _max_threads = atoi(argv[2]);
 _queue = malloc(sizeof(pc_queue_t));
 pcq_create(_queue, (size_t)_max_threads);
-_workers = malloc(sizeof(pthread_t) * (size_t)_max_threads);
+_workers = (pthread_t*)malloc(sizeof(pthread_t)*(size_t)_max_threads);
 for(int i = 0; i < _max_threads; i++) {
     pthread_create(&_workers[i], NULL, worker_thread_function, NULL);
 }
@@ -317,7 +317,7 @@ if (reg_pipe < 0) {
 }
 Register regist;
 ssize_t bytes_read;
-while (1) {
+while (_server_running) {
     int dummy_pipe = open(pipe_name, O_RDONLY);
     if (dummy_pipe < 0) {
         if (errno == ENOENT) {
@@ -333,31 +333,10 @@ while (1) {
 
     bytes_read = read(reg_pipe,&regist,sizeof(Register));
     while(bytes_read > 0)
-        switch(regist.code){
-            case 1:
-            pcq_enqueue(_queue,&regist);
-            break;
-            case 2:
-            pcq_enqueue(_queue,&regist);
-            break;
-            case 3:
-            pcq_enqueue(_queue,&regist);
-            break;
-            case 5:
-            pcq_enqueue(_queue,&regist);
-            break;
-            case 7:
-            pcq_enqueue(_queue,&regist);
-            break;
-            default:
-            break;
-
+        {
+            pcq_enqueue(_queue, &regist);
         }
-
-
-
 }
-
 for(int i = 0; i < _max_threads; i++) {
     pthread_join(_workers[i], NULL);
 }
