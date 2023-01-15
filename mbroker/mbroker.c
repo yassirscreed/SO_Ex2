@@ -12,10 +12,9 @@
 #include <errno.h>
 #include <signal.h>
 
-#define MAX_MSG_LEN 100
 
 typedef struct {
-    char box_name[32];
+    char box_name[BOX_MAX];
     uint64_t box_size;
     uint64_t n_publishers;
     uint64_t n_subscribers;   
@@ -26,129 +25,152 @@ typedef struct {
     pthread_mutex_t mutex;
 }Box;
 
-int _max_threads;
-int _max_sessions;
+
 pc_queue_t* _queue;
-pthread_t* _workers;
-int _server_running = 1;
-
-Box _boxes[64];
-
-
-void end(int sig){
-    (void) sig;
-    _server_running = 0;
-    exit(EXIT_SUCCESS);
-}
+Box _boxes[MAX_BOX_NUMB];
 
 
 void register_publisher(Register regist){
     int fd_pipe;
     int i,fhandle;
-    if (unlink(regist.named_pipe) != 0 && errno != ENOENT) {
-        fprintf(stderr, "[ERR]: unlink(%s) failed: %s\n", regist.named_pipe,strerror(errno));
-        exit(EXIT_FAILURE);
-    }
 
-    if (mkfifo(regist.named_pipe, 0777) != 0) {
-        fprintf(stderr, "[ERR]: mkfifo failed: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    for(i=0; i< 64;i++){
-        if(strcmp(regist.box_name,_boxes[i].box_name)==0)
+    for(i=0; i< MAX_BOX_NUMB;i++){
+        if(strcmp(regist.box_name,_boxes[i].box_name)==0 && _boxes[i].active == 1)
             break;    
     }
-    
+
     fd_pipe = open(regist.named_pipe,O_RDONLY);
+        if (fd_pipe == -1) {
+            fprintf(stdout,"Error opening pipe\n");
+            exit(EXIT_FAILURE); 
+        }
 
     if(i != 64 && _boxes[i].n_publishers == 0){
         Message m;
-        ssize_t bytes_read;
-        char box_name_path[65] = "/";
-        
+        char box_name_path[MAX_BOX_NUMB+1] = "/";
+        ssize_t size,size1;
+
         _boxes[i].n_publishers= 1;
         strcat(box_name_path,_boxes[i].box_name);
 
-        pthread_mutex_lock(&_boxes[i].mutex);
         fhandle = tfs_open(box_name_path,TFS_O_APPEND);
-
-        while((bytes_read = read(fd_pipe,&m,sizeof(Message))) != 0){
-            pthread_cond_broadcast(&_boxes[i].cond);
-            tfs_write(fhandle,m.message,sizeof(m.message));    
-        }
-        tfs_close(fhandle);
-        pthread_mutex_unlock(&_boxes[i].mutex);
-        _boxes[i].n_publishers= 0;
         
+
+        while((size1 = read(fd_pipe,&m,sizeof(Message))) > 0){
+            pthread_mutex_lock(&_boxes[i].mutex);
+            int dummy_pipe = open(regist.named_pipe, O_RDONLY);
+            if (dummy_pipe < 0) {
+                if (errno == ENOENT) {
+                exit(EXIT_FAILURE);
+            }
+                fprintf(stderr,"Failed to open server pipe\n");
+                exit(EXIT_FAILURE);
+            }
+            if (close(dummy_pipe) < 0) {
+                fprintf(stderr,"Failed to close pipe\n");
+                exit(EXIT_FAILURE);
+            }
+            size = tfs_write(fhandle,m.message,strlen(m.message)+1);
+            _boxes[i].box_size+= (uint64_t) size;            
+            pthread_cond_broadcast(&_boxes[i].cond);
+            pthread_mutex_unlock(&_boxes[i].mutex);
+            
+            
+        }
+        fprintf(stdout,"%ld\n",size1);
+        tfs_close(fhandle);
+        _boxes[i].n_publishers= 0;
     
     }
 
-    close(fd_pipe);
-    unlink(regist.named_pipe);
+    if(close(fd_pipe) == -1){
+            fprintf(stderr,"Error closing pipe\n");
+            exit(EXIT_FAILURE);
+        }
+    unlink(regist.named_pipe);     
+    fprintf(stdout,"Publisher finished successfully\n");
     
 }
 
 void register_subscriber(Register regist){
     int fd_pipe;
     int i,fhandle;
-    if (unlink(regist.named_pipe) != 0 && errno != ENOENT) {
-        fprintf(stderr, "[ERR]: unlink(%s) failed: %s\n", regist.named_pipe,strerror(errno));
-        exit(EXIT_FAILURE);
-    }
 
-    if (mkfifo(regist.named_pipe, 0777) != 0) {
-        fprintf(stderr, "[ERR]: mkfifo failed: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+    signal(SIGPIPE,SIG_IGN);
+
     for(i=0; i< 64;i++){
-        if(strcmp(regist.box_name,_boxes[i].box_name)==0)
+        if(strcmp(regist.box_name,_boxes[i].box_name)==0 && _boxes[i].active == 1)
             break;    
     }
 
     fd_pipe = open(regist.named_pipe,O_WRONLY);
-
-    if(i != 64 && _boxes[i].n_publishers == 0){
+    if (fd_pipe == -1) {
+        fprintf(stdout,"Error opening pipe\n");
+        exit(EXIT_FAILURE); 
+    }
+    
+    if(i != 64){
         Message m;
-        ssize_t bytes_read;
-        char box_name_path[65] = "/";
-        //char buffer[1024];
-        //char *token;
+        char box_name_path[BOX_MAX+1] = "/";
+        char buffer[MESSAGE_MAX];
+        ssize_t size;
         _boxes[i].n_subscribers++;
         strcat(box_name_path,_boxes[i].box_name);
 
-        pthread_mutex_lock(&_boxes[i].mutex);
-        fhandle = tfs_open(box_name_path,TFS_O_APPEND);
-
-        //tfs_read
         
-        while((bytes_read = write (fd_pipe,&m,sizeof(Message))) != -1 ){ //mudar condição -1
-            pthread_cond_wait(&_boxes[i].cond,&_boxes[i].mutex); // mudar para l  
+        fhandle = tfs_open(box_name_path,TFS_O_CREAT);
+        memset(buffer,'\0',sizeof(buffer));
+        size = tfs_read(fhandle,buffer,sizeof(buffer));
+        int i1 = (int)strlen(buffer);
+        int j = 0;
+        while(i1!=0) {
+            fprintf(stdout,"1\n"); 
+            memset(m.message,'\0',MESSAGE_MAX*sizeof(char));
+            strcpy(m.message,(buffer+j));
+            if(write(fd_pipe,&m,sizeof(Message)) == -1 || errno == EPIPE){
+                fprintf(stderr,"Error writing to pipe\n");
+                exit(EXIT_FAILURE);
+            }           
+            fprintf(stdout,"%s\n",m.message);
+            j+= i1 + 1;
+            i1 = (int)strlen((buffer+j));
+            
+        }
+        
+        
+        size =1;
+        while(size > 0){ 
+            pthread_mutex_lock(&_boxes[i].mutex);
+            pthread_cond_wait(&_boxes[i].cond,&_boxes[i].mutex);
+            size = tfs_read(fhandle,buffer,sizeof(buffer));
+            strcpy(m.message,(buffer));
+            if(write(fd_pipe,&m,sizeof(Message)) == -1 || errno == EPIPE){
+                break;
+            }
+            memset(buffer,'\0',sizeof(buffer));
+            pthread_mutex_unlock(&_boxes[i].mutex);
+
         }
 
         tfs_close(fhandle);
-        pthread_mutex_unlock(&_boxes[i].mutex);
         _boxes[i].n_subscribers--;
     }
-
-    close(fd_pipe);
+    
+    if(close(fd_pipe) == -1){
+        fprintf(stderr,"Error closing pipe\n");
+        exit(EXIT_FAILURE);
+    }
     unlink(regist.named_pipe);
+    fprintf(stdout,"Subscriber finished successfully\n");
     
 }
 
 void register_box(Register regist){
     int fd_pipe;
     int i,space = -1;
-    if (unlink(regist.named_pipe) != 0 && errno != ENOENT) {
-        fprintf(stderr, "[ERR]: unlink(%s) failed: %s\n", regist.named_pipe,strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    if (mkfifo(regist.named_pipe, 0777) != 0) {
-        fprintf(stderr, "[ERR]: mkfifo failed: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    for(i=0; i< 64;i++){
-        if(strcmp(regist.box_name,_boxes[i].box_name)==0)
+    
+    for(i=0; i< MAX_BOX_NUMB;i++){
+        if(strcmp(regist.box_name,_boxes[i].box_name)==0 && _boxes[i].active == 1)
             break;
         if(space == -1 && _boxes[i].active == 0)
             space = i;
@@ -156,49 +178,56 @@ void register_box(Register regist){
 
     Response r;
     r.code = 4;
-    if( space == -1){
-        r.return_code = -1;
-        strcpy(r.error_message,"Tfs full");
-    }
-    else if(i >= 64){
+    
+    if(i < 64){
         r.return_code = -1;
         strcpy(r.error_message,"Box name already in use");
+        fprintf(stdout,"Manager failed to create \n");
     }
-    else
-    {
-        char box_name_path[65] = "/";
+    else if( space == -1){
+        r.return_code = -1;
+        strcpy(r.error_message,"Tfs full");
+        fprintf(stdout,"Manager failed to create\n");
+    }
+    else{
+        char box_name_path[BOX_MAX+1] = "/";
         r.return_code = 0;
-        strcpy(_boxes[i].box_name,regist.box_name);
-        _boxes[i].n_publishers = 0;
-        _boxes[i].n_subscribers = 0;
-        _boxes[i].last = 0;
-        _boxes[i].active = 1;
-        pthread_mutex_init(&_boxes[i].mutex,NULL);
-        strcat(box_name_path,_boxes[i].box_name);
-        _boxes[i].tfs_file = tfs_open(box_name_path,TFS_O_CREAT);
-        pthread_cond_init(&_boxes[i].cond,NULL);
+        strcpy(_boxes[space].box_name,regist.box_name);
+        _boxes[space].n_publishers = 0;
+        _boxes[space].n_subscribers = 0;
+        _boxes[space].last = 0;
+        _boxes[space].active = 1;
+        pthread_mutex_init(&_boxes[space].mutex,NULL);
+        strcat(box_name_path,_boxes[space].box_name);
+        _boxes[space].tfs_file = tfs_open(box_name_path,TFS_O_CREAT);
+        pthread_cond_init(&_boxes[space].cond,NULL);
+        fprintf(stdout,"Box created successfully \n");
     }
+
     fd_pipe = open(regist.named_pipe,O_WRONLY);
-    if(write(fd_pipe,&r,sizeof(Response)) == -1){
-        return; //change
+    if (fd_pipe == -1) {
+        fprintf(stdout,"Error opening pipe\n");
+        exit(EXIT_FAILURE); 
     }
-    close(fd_pipe);
+
+    if(write(fd_pipe,&r,sizeof(Response)) == -1 || errno == EPIPE){
+        fprintf(stderr,"Error writing to pipe\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if(close(fd_pipe) == -1){
+        fprintf(stderr,"Error closing pipe\n");
+        exit(EXIT_FAILURE);
+    }
+
     unlink(regist.named_pipe);
+
 
 }
 
 void remove_box(Register regist){
     int i,fd_pipe;
-     if (unlink(regist.named_pipe) != 0 && errno != ENOENT) {
-        fprintf(stderr, "[ERR]: unlink(%s) failed: %s\n", regist.named_pipe,strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    if (mkfifo(regist.named_pipe, 0777) != 0) {
-        fprintf(stderr, "[ERR]: mkfifo failed: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    for(i=0;i<64;i++){
+    for(i=0;i<MAX_BOX_NUMB;i++){
         if(strcmp(regist.box_name,_boxes[i].box_name) == 0 && _boxes[i].active == 1)
             break;
     }
@@ -215,132 +244,173 @@ void remove_box(Register regist){
         pthread_cond_destroy(&_boxes[i].cond);
         pthread_mutex_destroy(&_boxes[i].mutex);
     }
-    fd_pipe = open(regist.named_pipe,O_WRONLY);
-    if(write(fd_pipe,&r,sizeof(Response)) == -1){
-        return; //change
-    } 
-    close(fd_pipe); 
-    unlink(regist.named_pipe);    
 
+    fd_pipe = open(regist.named_pipe,O_WRONLY);
+    if (fd_pipe == -1) {
+        fprintf(stdout,"Error opening pipe\n");
+        exit(EXIT_FAILURE); 
+    }
+
+    if(write(fd_pipe,&r,sizeof(Response)) == -1 || errno == EPIPE){
+        fprintf(stderr,"Error writing to pipe\n");
+        exit(EXIT_FAILURE);
+    }
+    if(close(fd_pipe) == -1){
+        fprintf(stderr,"Error closing pipe\n");
+        exit(EXIT_FAILURE);
+    }
+    unlink(regist.named_pipe);    
+    fprintf(stdout,"Box removed successfully \n");
 }
 
 void list_box(Register regist){
-    int i,fd_pipe,active_boxes =0;
-     if (unlink(regist.named_pipe) != 0 && errno != ENOENT) {
-        fprintf(stderr, "[ERR]: unlink(%s) failed: %s\n", regist.named_pipe,strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    if (mkfifo(regist.named_pipe, 0777) != 0) {
-        fprintf(stderr, "[ERR]: mkfifo failed: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+    int i,fd_pipe;
+    
     Manager_list ml;
     ml.code = 10;
     fd_pipe = open(regist.named_pipe,O_WRONLY);
+
+    if (fd_pipe == -1) {
+        fprintf(stdout,"Error opening pipe\n");
+        exit(EXIT_FAILURE); 
+    }
+
     for(i=0;i<64;i++){ 
         if(_boxes[i].active == 1){
             strcpy(ml.box_name,_boxes[i].box_name);
-            ml.box_size = sizeof(_boxes[i]); //?
-            ml.n_pubs=_boxes[i].n_publishers;
-            ml.n_subs=_boxes[i].n_subscribers;
-            if(write(fd_pipe,&ml,sizeof(Manager_list)) == -1)
-                return;
-            active_boxes++;    
+            ml.box_size = _boxes[i].box_size;
+            ml.n_publishers=_boxes[i].n_publishers;
+            ml.n_subscribers=_boxes[i].n_subscribers;
+            if(write(fd_pipe,&ml,sizeof(Manager_list)) == -1 || errno == EPIPE){
+                fprintf(stderr,"Error writing to pipe\n");
+                exit(EXIT_FAILURE);
+            }
         }        
     }
-    if(active_boxes == 0){
-        ml.last = 1;
-        if(write(fd_pipe,&ml,sizeof(Manager_list)) == -1)
-            return;
+
+    
+    ml.last = 1;
+    if(write(fd_pipe,&ml,sizeof(Manager_list)) == -1 || errno == EPIPE){
+        fprintf(stderr,"Error writing to pipe\n");
+        exit(EXIT_FAILURE);
     }
-    close(fd_pipe); 
-    unlink(regist.named_pipe);      
+    
+
+    if(close(fd_pipe) == -1){
+        fprintf(stderr,"Error closing pipe\n");
+        exit(EXIT_FAILURE);
+    }
+    unlink(regist.named_pipe);
+    fprintf(stdout,"List Boxes finished successfully\n");      
 }
 
-void *worker_thread_function() {
+void *worker_thread_function(void *arg) {
     while (1) {
-        //dequeue request from queue
         Register* regist = pcq_dequeue(_queue);
-        //handle request
+        (void) arg;
         switch (regist->code) {
             case 1:
+            fprintf(stdout,"Request to regist a publisher received\n");
             register_publisher(*regist);
             break;
             case 2:
+            fprintf(stdout,"Request to regist a subscriber received\n");
             register_subscriber(*regist);
-                break;
+            break;
             case 3:
+            fprintf(stdout,"Request to create a box received\n");
             register_box(*regist);
-                break;
+            break;
             case 5:
+            fprintf(stdout,"Request to remove a box received\n");
             remove_box(*regist);
-                break;
+            break;
             case 7:
+            fprintf(stdout,"Request to list boxes received\n");
             list_box(*regist);
-                break;
+            break;
             default:
-                break;
-
+            break;
         }
     }
-    return NULL;
 }
+
 
 int main(int argc, char** argv) {
-if (argc != 3) {
-    fprintf(stderr, "usage: mbroker <pipename> <max sessions>\n");
-    return -1;
+    if (argc != 3) {
+        fprintf(stderr, "usage: mbroker <pipename> <max sessions>\n");
+        exit(EXIT_FAILURE);
     }
 
+    if(tfs_init(NULL) == -1){
+        fprintf(stderr,"Tfs failed to initialize\n");
+        exit(EXIT_FAILURE);
+    }
 
-char pipe_name[256];
-strcpy(pipe_name,argv[1]);
-_max_threads = atoi(argv[2]);
-_queue = malloc(sizeof(pc_queue_t));
-pcq_create(_queue, (size_t)_max_threads);
-_workers = (pthread_t*)malloc(sizeof(pthread_t)*(size_t)_max_threads);
-for(int i = 0; i < _max_threads; i++) {
-    pthread_create(&_workers[i], NULL, worker_thread_function, NULL);
-}
-
-
-tfs_init(NULL);
-signal(SIGINT,end);
-
-mkfifo(pipe_name, 0666);
-int reg_pipe = open(pipe_name, O_RDONLY | O_NONBLOCK);
-
-if (reg_pipe < 0) {
-    perror("Error opening pipe");
-    return -1;
-}
-Register regist;
-ssize_t bytes_read;
-while (_server_running) {
-    int dummy_pipe = open(pipe_name, O_RDONLY);
-    if (dummy_pipe < 0) {
-        if (errno == ENOENT) {
+    char pipe_name[PIPE_MAX];
+    pthread_t* workers;
+    size_t max_threads;
+    
+    strcpy(pipe_name,argv[1]);
+    max_threads = (size_t) atoi(argv[2]);
+    
+    _queue = malloc(sizeof(pc_queue_t));
+    pcq_create(_queue, max_threads);
+    
+    workers = malloc(sizeof(pthread_t) * max_threads);
+    for(int i = 0; i < max_threads; i++) {
+        pthread_create(&workers[i], NULL, worker_thread_function, NULL);
+    }
+    
+    if (unlink(pipe_name) != 0 && errno != ENOENT) {
+        fprintf(stderr, "[ERR]: unlink(%s) failed: %s\n", pipe_name,strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    
+    if (mkfifo(pipe_name, PIPE_CODE) != 0) {
+        fprintf(stderr, "[ERR]: mkfifo failed: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    
+    int reg_pipe = open(pipe_name, O_RDONLY);
+    if (reg_pipe < 0) {
+        fprintf(stderr,"Error opening pipe\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    fprintf(stdout,"Mbroker created\n");
+    
+    Register regist;
+    ssize_t bytes_read;
+    while (1) {
+        int dummy_pipe = open(pipe_name, O_RDONLY);
+        if (dummy_pipe < 0) {
+            if (errno == ENOENT) {
+                exit(EXIT_FAILURE);
+            }
+            fprintf(stderr,"Failed to open server pipe\n");
             exit(EXIT_FAILURE);
         }
-        perror("Failed to open server pipe");
-        exit(EXIT_FAILURE);
-    }
-    if (close(dummy_pipe) < 0) {
-        perror("Failed to close pipe");
-        exit(EXIT_FAILURE);
-    }
-
-    bytes_read = read(reg_pipe,&regist,sizeof(Register));
-    while(bytes_read > 0)
-        {
-            pcq_enqueue(_queue, &regist);
+        if (close(dummy_pipe) < 0) {
+            fprintf(stderr,"Failed to close pipe\n");
+            exit(EXIT_FAILURE);
         }
-}
-for(int i = 0; i < _max_threads; i++) {
-    pthread_join(_workers[i], NULL);
-}
-close(reg_pipe);
-unlink(pipe_name);
-return 0;
+    
+        if((bytes_read = read(reg_pipe,&regist,sizeof(Register))) < 0){
+            fprintf(stderr,"Error reading from pipe\n");
+            exit(EXIT_FAILURE); 
+        }
+
+        if(bytes_read>0)
+            pcq_enqueue(_queue,&regist);
+        
+    
+    }
+    for(int i = 0; i < max_threads; i++) {
+        pthread_join(workers[i], NULL);
+    }
+    
+    close(reg_pipe);
+    unlink(pipe_name);
+    return 0;
 }
